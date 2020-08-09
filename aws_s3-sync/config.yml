@@ -1,0 +1,29 @@
+version: 2.1
+orbs:
+  aws-s3: circleci/aws-s3@1.0.16
+ 
+jobs:
+  build:
+    working_directory: ~/app
+    docker:
+      - image: 'cimg/python:3.6'
+    steps:
+      - checkout
+      - aws-s3/sync:
+          arguments: |
+            --acl public-read \
+            --acl bucket-owner-full-control \
+            --cache-control "max-age=86400" \
+            --delete
+          from: docs
+          overwrite: true
+          to: 's3://adachin.jp/docs'
+ 
+workflows:
+  version: 2
+  s3-deploy:
+    jobs:
+      - build:
+          filters:
+            branches:
+              only: master

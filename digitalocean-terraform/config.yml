@@ -1,0 +1,88 @@
+version: 2.1
+ 
+references:
+default_config: &default_config
+  docker:
+    - image: hashicorp/terraform:light
+  working_directory: ~/project
+  environment:
+    TERRAFORM_ENV: ~/project/
+ 
+repo_cache_key: &repo_cache_key v1-repo-{{ .Branch }}-{{ .Revision }}
+ 
+restore_repo: &restore_repo
+  restore_cache:
+    key: *repo_cache_key
+ 
+save_repo: &save_repo
+  save_cache:
+    key: *repo_cache_key
+    paths:
+      - ~/project
+ 
+set_terraform_environment: &set_terraform_environment
+  run:
+    name: set terraform environment
+    command: |
+      export DIGITALOCEAN_TOKEN="${DIGITALOCEAN_TOKEN}"
+      cd ~/project/
+terraform_init: &terraform_init
+  run:
+    name: terraform init
+    command: |
+      cd ~/project/terraform/env/prd
+      terraform init -backend-config="token=${TF_API_TOKEN}"
+ 
+jobs:
+  terraform_fmt_validate:
+    <<: *default_config
+    steps:
+      - checkout
+      - *set_terraform_environment
+      - run:
+          name: terraform fmt validate
+          command: |
+            cd ~/project/terraform/env/prd
+            terraform init -backend-config="token=${TF_API_TOKEN}"
+            terraform fmt
+            terraform validate
+      - *save_repo
+ 
+  terraform_plan:
+    <<: *default_config
+    steps:
+      - *restore_repo
+      - *set_terraform_environment
+      - *terraform_init
+      - run:
+          name: terraform plan
+          command: |
+            cd ~/project/terraform/env/prd
+            terraform plan
+ 
+  terraform_apply:
+    <<: *default_config
+    steps:
+      - *restore_repo
+      - *set_terraform_environment
+      - *terraform_init
+      - run:
+          name: terraform apply
+          command: |
+            cd ~/project/terraform/env/prd
+            terraform apply -auto-approve
+ 
+workflows:
+  version: 2
+  deploy:
+    jobs:
+      - terraform_fmt_validate
+      - terraform_plan:
+          requires:
+            - terraform_fmt_validate
+      - terraform_apply:
+          filters:
+            branches:
+              only: master
+          requires:
+            - terraform_plan

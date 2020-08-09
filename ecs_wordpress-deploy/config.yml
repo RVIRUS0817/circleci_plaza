@@ -1,0 +1,47 @@
+version: 2.1
+orbs:
+  aws-ecr: circleci/aws-ecr@6.7.0
+  aws-ecs: circleci/aws-ecs@1.1.0
+ 
+executors:
+  docker_build:
+    machine:
+      docker_layer_caching: true
+ 
+jobs:
+  deploy_wordpress_stg:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - run:
+          name: setting aws configure
+          command: |
+            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_STG} \
+            && aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_STG}
+      - run:
+          name: copy wp-config.php
+          command: |
+            aws s3 cp s3://stg.adachin.jp/wordpress/wp-config.php ./wp-config.php.corp
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_STG
+          aws-access-key-id: AWS_ACCESS_KEY_ID_STG
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG
+          region: AWS_REGION
+          repo: 'wordpress'
+          dockerfile: docker/stg/wordpress/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'wordpress'
+          service-name: 'wordpress-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=wordpress,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/wordpress:${CIRCLE_SHA1}'
+ 
+workflows:
+  version: 2
+  deploy_stg:
+    jobs:
+      - deploy_wordpress_stg:
+          filters:
+            branches:
+              only: stg
