@@ -3,7 +3,7 @@ version: 2.1
 references:
 default_config: &default_config
   docker:
-    - image: hashicorp/terraform:light
+    - image: hashicorp/terraform:0.12.29
   working_directory: ~/project
   environment:
     TERRAFORM_ENV: ~/project/
