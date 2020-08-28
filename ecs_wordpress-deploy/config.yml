@@ -10,8 +10,8 @@ executors:
 
 parameters:
   deploy_wordpress_stg:
-      type: boolean
-	      default: false
+    type: boolean
+      default: false
  
 jobs:
   deploy_wordpress_stg:
