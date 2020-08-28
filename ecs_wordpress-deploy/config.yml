@@ -7,6 +7,11 @@ executors:
   docker_build:
     machine:
       docker_layer_caching: true
+
+parameters:
+  deploy_wordpress_stg:
+      type: boolean
+	      default: false
  
 jobs:
   deploy_wordpress_stg:
@@ -68,11 +73,9 @@ jobs:
 workflows:
   version: 2
   deploy_stg:
+    when: << pipeline.parameters.deploy_wordpress_stg >>
     jobs:
-      - deploy_wordpress_stg:
-          filters:
-            branches:
-              only: develop
+      - deploy_wordpress_stg
   deploy_prd:
     jobs:
       - deploy_wordpress_prd:
