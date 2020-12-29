@@ -77,55 +77,6 @@ executors:
           message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
           webhook: ${SLACK_WEBHOOK}
 
-## Deploy Private
-  deploy_app_private:
-    working_directory: ~/app
-    executor: docker_build
-    steps:
-      - checkout
-      - run:
-          name: echo authorized_keys
-          command: |
-            echo ${DEVOPS_KEY_PRD} >> authorized_keys
-      - run:
-          name: setting aws configure
-          command: |
-            aws configure set aws_access_key_id ${PRD_TERRAFORM_AWS_ACCESS_KEY_ID} \
-            && aws configure set aws_secret_access_key ${PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY}
-      - run:
-          name: copy .env
-          command: |
-            aws s3 cp s3://backup.adachin.com/app/prd/private-env ./.env 
-      - run:
-          name: copy and echo aws credentials
-          command: |
-            cp docker/prd/adachin-private-app/common/.aws/credentials credentials \
-            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
-            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
-      - aws-ecr/build-and-push-image:
-          account-url: AWS_ECR_ACCOUNT_URL_PRD
-          aws-access-key-id: PRD_TERRAFORM_AWS_ACCESS_KEY_ID
-          aws-secret-access-key: PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY
-          region: AWS_REGION
-          repo: 'adachin-private-app'
-          dockerfile: docker/prd/adachin-private-app/Dockerfile
-          tag: "${CIRCLE_SHA1}"
-      - aws-ecs/update-service:
-          family: 'adachin-private-app'
-          service-name: 'adachin-private-app-service'
-          cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-private-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-private-app:${CIRCLE_SHA1}'
-      - slack/status:
-          fail_only: true
-          mentions: 'here'
-          failure_message: '[Private] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
-          webhook: ${SLACK_WEBHOOK}
-      - slack/notify:
-          title: Private 👍
-          color: '#42f486'
-          message: 'Private-App is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
-          webhook: ${SLACK_WEBHOOK}
-
 ## Deploy Prd
   deploy_app_devops_prd:
     working_directory: ~/app
