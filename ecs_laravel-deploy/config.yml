@@ -191,8 +191,6 @@ executors:
 
 workflows:
   version: 2
-  terraform_ci:
-    jobs:
   deploy_stg:
     when: << pipeline.parameters.deploy_app_devops_stg >>
     jobs:
