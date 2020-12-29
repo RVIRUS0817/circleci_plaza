@@ -6,8 +6,18 @@ jobs:
     steps:
       - add_ssh_keys:
           fingerprints:
-            - "xxxxxxxxxxxxxxxxxxxxxxxxxxx" #上記メモったハッシュを指定
+            - "xxxxxxxxxxxxxxxxxxxxxxxxxxx" 
       - run: ssh -p $SSH_PORT $SSH_USER@$SSH_HOST "/var/www/adachin.me/deploy-me.sh"
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: 'Error Deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}    :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: 👍
+          color: '#42f486'
+          message: ' Deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}    :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
  
 workflows:
   version: 2

@@ -12,7 +12,7 @@ message="ブランチ名: \`"${BRANCHNAME}"\` https://app.circleci.com/pipelines
 help() {
 echo "
   下記のようにブランチを指定して実行してください。
-  (例) ~/www/hoge/docker/stg/deploy.sh ブランチ名
+  (例) ~/www/adachin/docker/stg/deploy.sh ブランチ名
     "
 }
 

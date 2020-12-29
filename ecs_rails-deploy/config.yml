@@ -2,14 +2,21 @@ version: 2.1
 orbs:
   aws-ecr: circleci/aws-ecr@6.7.0
   aws-ecs: circleci/aws-ecs@1.1.0
- 
+  slack: circleci/slack@3.4.2
+
+parameters:
+  build_and_push_docker_image_app_devops_stg:
+    type: boolean
+    default: false
+
 executors:
   default:
     docker:
-      - image: circleci/ruby:2.5.7-stretch
+      - image: circleci/ruby:2.7.1-browsers
         environment:
           BUNDLE_JOBS: 3
           BUNDLE_RETRY: 3
+          BUNDLER_VERSION: 2.1.4
           BUNDLE_PATH: vendor/bundle
           RAILS_ENV: test
           DATABASE_HOST: '127.0.0.1'
@@ -21,7 +28,7 @@ executors:
   docker_build:
     machine:
       docker_layer_caching: true　
- 
+
 commands:
   bundle_install_rspec:
     steps:
@@ -29,66 +36,79 @@ commands:
           name: copy config files
           command: |
             cp config/mail.yml.example config/mail.yml
+
       - run:
           name: Which bundler?
           command: bundle -v
- 
+
       - restore_cache:
           keys:
             - cache-gem-{{ checksum "Gemfile.lock" }}
             - cache-gem-
- 
+
       - run:
           name: Bundle Install
           command: bundle check || bundle install
- 
+
       - save_cache:
           key: cache-gem-{{ checksum "Gemfile.lock" }}
           paths:
             - vendor/bundle
- 
+
       - run:
           name: Database create
           command: DISABLE_SPRING=true bin/rake db:create --trace
- 
+
       - run:
           name: Database setup
           command: DISABLE_SPRING=true bin/rake db:schema:load --trace
- 
+
       - run:
           name: Run rspec
+          environment:
+            SALT: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
           command: |
             TZ=Asia/Tokyo \
               bundle exec rspec --profile 10 \
                                 --out test_results/rspec.xml \
                                 --format progress \
                                 $(circleci tests glob "spec/**/*_spec.rb" | circleci tests split --split-by=timings)
- 
-## Pre
-  build_and_push_docker_image_app_devops_pre:
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: 'Error rspec 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: 👍
+          color: '#42f486'
+          message: 'rspec OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+## stg
+  build_and_push_docker_image_app_devops_stg:
     steps:
       - aws-ecr/build-and-push-image:
-          account-url: AWS_ECR_ACCOUNT_URL_PRE
-          aws-access-key-id: AWS_ACCESS_KEY_ID_PRE
-          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRE
+          account-url: AWS_ECR_ACCOUNT_URL_stg
+          aws-access-key-id: AWS_ACCESS_KEY_ID_STG
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG
           region: AWS_REGION
-          repo: 'adachin-app-pre'
-          dockerfile: docker/pre/adachin-app/Dockerfile
+          repo: 'adachin-app-stg'
+          dockerfile: docker/stg/adachin-app/Dockerfile
           tag: "${CIRCLE_SHA1}"
- 
+
       - aws-ecs/update-service:
           family: 'adachin-app'
           service-name: 'adachin-app-service'
           cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRE}/adachin-app-pre:${CIRCLE_SHA1}'
- 
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
+
       - aws-ecs/update-service:
           family: 'adachin-devops'
           service-name: 'adachin-devops-service'
           cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRE}/adachin-app-pre:${CIRCLE_SHA1}'
- 
-  db_migrate_app_pre:
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
+
+  db_migrate_app_stg:
     steps:
       - aws-ecs/run-task:
           cluster: 'adachin'
@@ -96,10 +116,46 @@ commands:
           count: 1
           launch-type: FARGATE
           awsvpc: true
-          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxx
-          security-group-ids: sg-xxxxxxx
-          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=pre\\\"]}]}"
- 
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxxxxx,subnet-xxxxxxxxxxx
+          security-group-ids: sg-xxxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=stg\\\"]}]}"
+
+## Prd
+  build_and_push_docker_image_app_devops_prd:
+    steps:
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_PRD
+          aws-access-key-id: AWS_ACCESS_KEY_ID_PRD
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRD
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/prd/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+
+      - aws-ecs/update-service:
+          family: 'adachin-devops'
+          service-name: 'adachin-devops-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+
+  db_migrate_app_prd:
+    steps:
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxxx
+          security-group-ids: sg-xxxxxxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=production\\\"]}]}"
+
 jobs:
   rspec:
     working_directory: ~/rspec
@@ -107,44 +163,30 @@ jobs:
     steps:
       - checkout
       - bundle_install_rspec
- 
-  deploy_app_devops_pre:
+
+  deploy_app_devops_stg:
     working_directory: ~/app
     executor: default
     steps:
       - setup_remote_docker
       - checkout
       - run:
-          name: check_changed_directory_terraform
+          name: echo authorized_keys
           command: |
-            if ! ~/app/scripts/circleci/is_changed_directory.sh "terraform"; then
-              circleci step halt
-            fi
-      - add_ssh_keys:
-          fingerprints:
-            - "axxxxxxx"
+            echo ${DEVOPS_KEY_STG} >> authorized_keys
       - run:
-          name: find mv ssh key id_rsa_github,echo authorized_keys and copy config-ssh
+          name: install awscli
           command: |
-            find /home/circleci/.ssh -type f | grep '[0-9]' | xargs -I% mv % . \
-            && echo ${DEVOPS_KEY_PRE} >> authorized_keys \
-            && cp docker/pre/adachin-app/common/.ssh/config-ssh config-ssh
+            sudo apt-get install awscli -y
       - run:
-          name: copy and echo .env
+          name: setting aws configure
           command: |
-            cp docker/pre/adachin-app/.env.example .env \
-            && echo DATABASE_HOST="${DATABASE_HOST_PRE}" >> .env \
-            && echo DATABASE_NAME="${DATABASE_NAME_PRE}" >> .env \
-            && echo DATABASE_PASSWORD="${DATABASE_PASSWORD_PRE}" >> .env \
-            && echo DATABASE_USER="${DATABASE_USER_PRE}" >> .env \
-            && echo SECRET_KEY_BASE="${SECRET_KEY_BASE}" >> .env \
-            && echo MAIL_PASSWORD="${MAIL_PASS}" >> .env \
-            && echo CHATWORK_API_TOKEN="${CHATWORK_API_TOKEN}" >> .env \
-            && echo CHATWORK_API_ROOM_ID="${CHATWORK_API_ROOM_ID_PRE}" >> .env \
-            && echo BITLY_ACCESS_TOKEN="${BITLY_ACCESS_TOKEN}" >> .env \
-            && echo AWS_S3_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID_PRE_S3}" >> .env \
-            && echo AWS_S3_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY_PRE_S3}" >> .env \
-            && echo AWS_S3_BUCKET_NAME="${AWS_S3_BUCKET_NAME_PRE}" >> .env
+            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_STG_S3} \
+            && aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_STG_S3}
+      - run:
+          name: download .env
+          command: |
+            aws s3 cp s3://stg-adachin.com/stg/env .env
       - run:
           name: copy and echo mail.yml
           command: |
@@ -153,19 +195,84 @@ jobs:
       - run:
           name: copy and echo aws credentials
           command: |
-            cp docker/pre/adachin-app/common/.aws/credentials credentials \
-            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRE_S3}" credentials \
-            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRE_S3}" credentials
-      - build_and_push_docker_image_app_devops_pre
-      - db_migrate_app_pre
- 
- 
+            cp docker/stg/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_STG_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_STG_S3}" credentials
+      - build_and_push_docker_image_app_devops_stg
+      - db_migrate_app_stg
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[stg] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: stg 👍
+          color: '#42f486'
+          message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+  deploy_app_devops_prd:
+    working_directory: ~/app
+    executor: default
+    steps:
+      - setup_remote_docker
+      - checkout
+      - run:
+          name: echo authorized_keys
+          command: |
+            echo ${DEVOPS_KEY_PRD} >> authorized_keys
+      - run:
+          name: install awscli
+          command: |
+            sudo apt-get install awscli -y
+      - run:
+          name: setting aws configure
+          command: |
+            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_PRD_S3} \
+            && aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_PRD_S3}
+      - run:
+          name: download .env
+          command: |
+            aws s3 cp s3://adachin.com/prd/env .env
+      - run:
+          name: copy and echo mail.yml
+          command: |
+            cp config/mail.yml.example config/mail.yml \
+            && sed -i "s/\${MAIL_PASS}/${MAIL_PASS}/g" config/mail.yml
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/prd/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
+      - build_and_push_docker_image_app_devops_prd
+      - db_migrate_app_prd
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Prd] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Prd 👍
+          color: '#42f486'
+          message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}  
+
 workflows:
   version: 2
-  deploy_pre_and_rspec:
+  some_ci:
     jobs:
       - rspec
-      - deploy_app_devops_pre:
+
+  deploy_stg:
+    when: << pipeline.parameters.build_and_push_docker_image_app_devops_stg >>
+    jobs:
+      - deploy_app_devops_stg
+
+  deploy_prd:
+    jobs:
+      - deploy_app_devops_prd:
           filters:
             branches:
-              only: develop
+              only: master
+

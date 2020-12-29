@@ -1,0 +1,205 @@
+version: 2.1
+orbs:
+  aws-ecr: circleci/aws-ecr@6.7.0
+  aws-ecs: circleci/aws-ecs@1.1.0
+  slack: circleci/slack@3.4.2
+
+parameters:
+  deploy_app_devops_stg:
+    type: boolean
+    default: false
+
+executors:
+  docker_build:
+    machine:
+      docker_layer_caching: true
+
+## Deploy stg
+  deploy_app_devops_stg:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - run:
+          name: echo authorized_keys
+          command: |
+            echo ${DEVOPS_KEY_STG} >> authorized_keys
+      - run:
+          name: setting aws configure
+          command: |
+            aws configure set aws_access_key_id ${STG_TERRAFORM_AWS_ACCESS_KEY_ID} \
+            && aws configure set aws_secret_access_key ${STG_TERRAFORM_AWS_SECRET_ACCESS_KEY}
+      - run:
+          name: copy .env
+          command: |
+            aws s3 cp s3://stg.adachin.com/app/stg/env ./.env 
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/stg/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_STG_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_STG_S3}" credentials
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_STG
+          aws-access-key-id: STG_TERRAFORM_AWS_ACCESS_KEY_ID
+          aws-secret-access-key: STG_TERRAFORM_AWS_SECRET_ACCESS_KEY
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/stg/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/update-service:
+          family: 'adachin-devops'
+          service-name: 'adachin-devops-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxxx,subnet-xxxxxxxx,subnet-xxxxxx
+          security-group-ids: sg-xxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"sh\\\", \\\"/var/www/adachin/docker/stg/migrate.sh\\\"]}]}"
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Stg] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Stg 👍
+          color: '#42f486'
+          message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+## Deploy Private
+  deploy_app_private:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - run:
+          name: echo authorized_keys
+          command: |
+            echo ${DEVOPS_KEY_PRD} >> authorized_keys
+      - run:
+          name: setting aws configure
+          command: |
+            aws configure set aws_access_key_id ${PRD_TERRAFORM_AWS_ACCESS_KEY_ID} \
+            && aws configure set aws_secret_access_key ${PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY}
+      - run:
+          name: copy .env
+          command: |
+            aws s3 cp s3://backup.adachin.com/app/prd/private-env ./.env 
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/prd/adachin-private-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_PRD
+          aws-access-key-id: PRD_TERRAFORM_AWS_ACCESS_KEY_ID
+          aws-secret-access-key: PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY
+          region: AWS_REGION
+          repo: 'adachin-private-app'
+          dockerfile: docker/prd/adachin-private-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'adachin-private-app'
+          service-name: 'adachin-private-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-private-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-private-app:${CIRCLE_SHA1}'
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Private] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Private 👍
+          color: '#42f486'
+          message: 'Private-App is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+## Deploy Prd
+  deploy_app_devops_prd:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - run:
+          name: echo authorized_keys
+          command: |
+            echo ${DEVOPS_KEY_PRD} >> authorized_keys
+      - run:
+          name: setting aws configure
+          command: |
+            aws configure set aws_access_key_id ${PRD_TERRAFORM_AWS_ACCESS_KEY_ID} \
+            && aws configure set aws_secret_access_key ${PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY}
+      - run:
+          name: copy .env
+          command: |
+            aws s3 cp s3://backup.adachin.com/app/prd/prd-env ./.env 
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/prd/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_PRD
+          aws-access-key-id: PRD_TERRAFORM_AWS_ACCESS_KEY_ID
+          aws-secret-access-key: PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/prd/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/update-service:
+          family: 'adachin-devops'
+          service-name: 'adachin-devops-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxx
+          security-group-ids: sg-xxxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"sh\\\", \\\"/var/www/adachin/docker/prd/migrate.sh\\\"]}]}"
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Prd] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Prd 👍
+          color: '#42f486'
+          message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+workflows:
+  version: 2
+  terraform_ci:
+    jobs:
+  deploy_stg:
+    when: << pipeline.parameters.deploy_app_devops_stg >>
+    jobs:
+      - deploy_app_devops_stg
+  deploy_prd:
+    jobs:
+      - deploy_app_devops_prd:
+          filters:
+            branches:
+              only: master
