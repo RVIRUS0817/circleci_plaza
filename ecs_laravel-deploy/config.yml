@@ -15,6 +15,7 @@ executors:
       docker_layer_caching: true
 
 ## Laravel Test
+jobs:
   laravel_test:
     docker:
       - image: circleci/php:7.2.9-fpm-browsers
