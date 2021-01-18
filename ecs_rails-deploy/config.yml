@@ -32,6 +32,7 @@ jobs:
           MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
           MYSQL_HOST: '%'
     steps:
+      - setup_remote_docker
       - checkout
       - run:
           name: copy config files
@@ -90,7 +91,6 @@ jobs:
     working_directory: ~/app
     executor: docker_build
     steps:
-      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
@@ -163,7 +163,6 @@ jobs:
     working_directory: ~/app
     executor: docker_build
     steps:
-      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
