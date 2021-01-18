@@ -90,6 +90,7 @@ jobs:
     working_directory: ~/app
     executor: docker_build
     steps:
+      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
@@ -162,6 +163,7 @@ jobs:
     working_directory: ~/app
     executor: docker_build
     steps:
+      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
