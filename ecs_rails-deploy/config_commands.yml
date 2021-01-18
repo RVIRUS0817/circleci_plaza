@@ -5,18 +5,12 @@ orbs:
   slack: circleci/slack@3.4.2
 
 parameters:
-  deploy_app_devops_stg:
+  build_and_push_docker_image_app_devops_stg:
     type: boolean
     default: false
 
 executors:
-  docker_build:
-    machine:
-      docker_layer_caching: true
-
-# rspec
-jobs:
-  rspec:
+  default:
     docker:
       - image: circleci/ruby:2.7.1-browsers
         environment:
@@ -31,13 +25,17 @@ jobs:
         environment:
           MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
           MYSQL_HOST: '%'
+  docker_build:
+    machine:
+      docker_layer_caching: true　
+
+commands:
+  bundle_install_rspec:
     steps:
-      - checkout
       - run:
           name: copy config files
           command: |
             cp config/mail.yml.example config/mail.yml
-
       - run:
           name: Which bundler?
           command: bundle -v
@@ -85,11 +83,91 @@ jobs:
           message: 'rspec OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
           webhook: ${SLACK_WEBHOOK}
 
-# stg
+## stg
+  build_and_push_docker_image_app_devops_stg:
+    steps:
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_stg
+          aws-access-key-id: AWS_ACCESS_KEY_ID_STG
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG
+          region: AWS_REGION
+          repo: 'adachin-app-stg'
+          dockerfile: docker/stg/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
+
+      - aws-ecs/update-service:
+          family: 'adachin-devops'
+          service-name: 'adachin-devops-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
+
+  db_migrate_app_stg:
+    steps:
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxxxxx,subnet-xxxxxxxxxxx
+          security-group-ids: sg-xxxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=stg\\\"]}]}"
+
+## Prd
+  build_and_push_docker_image_app_devops_prd:
+    steps:
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_PRD
+          aws-access-key-id: AWS_ACCESS_KEY_ID_PRD
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRD
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/prd/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+
+      - aws-ecs/update-service:
+          family: 'adachin-devops'
+          service-name: 'adachin-devops-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+
+  db_migrate_app_prd:
+    steps:
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxxx
+          security-group-ids: sg-xxxxxxxxxxxxx
+          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=production\\\"]}]}"
+
+jobs:
+  rspec:
+    working_directory: ~/rspec
+    executor: default
+    steps:
+      - checkout
+      - bundle_install_rspec
+
   deploy_app_devops_stg:
     working_directory: ~/app
-    executor: docker_build
+    executor: default
     steps:
+      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
@@ -119,33 +197,8 @@ jobs:
             cp docker/stg/adachin-app/common/.aws/credentials credentials \
             && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_STG_S3}" credentials \
             && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_STG_S3}" credentials
-      - aws-ecr/build-and-push-image:
-          account-url: AWS_ECR_ACCOUNT_URL_stg
-          aws-access-key-id: AWS_ACCESS_KEY_ID_STG
-          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG
-          region: AWS_REGION
-          repo: 'adachin-app-stg'
-          dockerfile: docker/stg/adachin-app/Dockerfile
-          tag: "${CIRCLE_SHA1}"
-      - aws-ecs/update-service:
-          family: 'adachin-app'
-          service-name: 'adachin-app-service'
-          cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
-      - aws-ecs/update-service:
-          family: 'adachin-devops'
-          service-name: 'adachin-devops-service'
-          cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app-stg:${CIRCLE_SHA1}'
-      - aws-ecs/run-task:
-          cluster: 'adachin'
-          task-definition: 'adachin-app'
-          count: 1
-          launch-type: FARGATE
-          awsvpc: true
-          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxxxxx,subnet-xxxxxxxxxxx
-          security-group-ids: sg-xxxxxxxxxx
-          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=stg\\\"]}]}"
+      - build_and_push_docker_image_app_devops_stg
+      - db_migrate_app_stg
       - slack/status:
           fail_only: true
           mentions: 'here'
@@ -157,11 +210,11 @@ jobs:
           message: 'App,devops is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
           webhook: ${SLACK_WEBHOOK}
 
-# prd
   deploy_app_devops_prd:
     working_directory: ~/app
-    executor: docker_build
+    executor: default
     steps:
+      - setup_remote_docker
       - checkout
       - run:
           name: echo authorized_keys
@@ -191,33 +244,8 @@ jobs:
             cp docker/prd/adachin-app/common/.aws/credentials credentials \
             && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
             && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
-      - aws-ecr/build-and-push-image:
-          account-url: AWS_ECR_ACCOUNT_URL_PRD
-          aws-access-key-id: AWS_ACCESS_KEY_ID_PRD
-          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRD
-          region: AWS_REGION
-          repo: 'adachin-app'
-          dockerfile: docker/prd/adachin-app/Dockerfile
-          tag: "${CIRCLE_SHA1}"
-      - aws-ecs/update-service:
-          family: 'adachin-app'
-          service-name: 'adachin-app-service'
-          cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
-      - aws-ecs/update-service:
-          family: 'adachin-devops'
-          service-name: 'adachin-devops-service'
-          cluster-name: 'adachin'
-          container-image-name-updates: 'container=adachin-devops,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
-      - aws-ecs/run-task:
-          cluster: 'adachin'
-          task-definition: 'adachin-app'
-          count: 1
-          launch-type: FARGATE
-          awsvpc: true
-          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxxx
-          security-group-ids: sg-xxxxxxxxxxxxx
-          overrides: "{\\\"containerOverrides\\\":[{\\\"name\\\": \\\"adachin-app\\\",\\\"command\\\": [\\\"bundle\\\", \\\"exec\\\", \\\"rake\\\", \\\"db:migrate\\\", \\\"RAILS_ENV=production\\\"]}]}"
+      - build_and_push_docker_image_app_devops_prd
+      - db_migrate_app_prd
       - slack/status:
           fail_only: true
           mentions: 'here'
@@ -234,14 +262,15 @@ workflows:
   rspec:
     jobs:
       - rspec
+
   deploy_stg:
-    when: << pipeline.parameters.deploy_app_devops_stg >>
+    when: << pipeline.parameters.build_and_push_docker_image_app_devops_stg >>
     jobs:
       - deploy_app_devops_stg
+
   deploy_prd:
     jobs:
       - deploy_app_devops_prd:
           filters:
             branches:
               only: master
-
