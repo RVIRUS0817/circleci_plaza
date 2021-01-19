@@ -97,10 +97,6 @@ jobs:
           command: |
             echo ${DEVOPS_KEY_STG} >> authorized_keys
       - run:
-          name: install awscli
-          command: |
-            sudo apt-get install awscli -y
-      - run:
           name: setting aws configure
           command: |
             aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_STG_S3} \
@@ -168,10 +164,6 @@ jobs:
           name: echo authorized_keys
           command: |
             echo ${DEVOPS_KEY_PRD} >> authorized_keys
-      - run:
-          name: install awscli
-          command: |
-            sudo apt-get install awscli -y
       - run:
           name: setting aws configure
           command: |
