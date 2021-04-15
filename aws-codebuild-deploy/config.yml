@@ -1,0 +1,98 @@
+version: 2.1
+orbs:
+  slack: circleci/slack@3.4.2
+ 
+references:
+default_config: &default_config
+  docker:
+    - image: alpine:3.12.4
+  working_directory: ~/project
+ 
+parameters:
+  deploy_stg_codebuild:
+    type: boolean
+    default: false
+ 
+executors:
+  docker_build:
+    machine:
+      docker_layer_caching: true
+ 
+jobs:
+  deploy_stg_codebuild:
+    <<: *default_config
+    steps:
+    - checkout
+    - run:
+        name : update and install awscli
+        command: |
+            apk update && apk add bash curl gcc py-pip && pip install --upgrade pip && pip install awscli
+    - run:
+        name: setting aws configure
+        command: |
+            aws configure set aws_access_key_id ${STG_AWS_ACCESS_KEY_ID} \
+            && aws configure set aws_secret_access_key ${STG_AWS_SECRET_ACCESS_KEY}
+    - run:
+        name : fix branch
+        command: |
+            echo ${CIRCLE_BRANCH} |sed -ri "s/BRANCH_NAME/$CIRCLE_BRANCH/g" ~/project/deploy/deploy_codebuild.sh
+ 
+    - run:
+        name : deploy stg
+        command: |
+            ~/project/deploy/deploy_codebuild.sh
+    - slack/status:
+        fail_only: true
+        mentions: 'here'
+        failure_message: 'Error Deploy Stg🚨 \n :innocent: ${CIRCLE_USERNAME}    :branch: ${CIRCLE_BRANCH}'
+        webhook: ${SLACK_WEBHOOK}
+    - slack/notify:
+        title: Stg
+        color: '#42f486'
+        message: 'Deploy OK ✨ \n :smile: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+        webhook: ${SLACK_WEBHOOK}
+ 
+  deploy_prd_codebuild:
+    <<: *default_config
+    steps:
+    - checkout
+    - run:
+        name : update and install awscli
+        command: |
+            apk update && apk add bash curl gcc py-pip && pip install --upgrade pip && pip install awscli
+    - run:
+        name: setting aws configure
+        command: |
+            aws configure set aws_access_key_id ${PRD_AWS_ACCESS_KEY_ID} \
+            && aws configure set aws_secret_access_key ${PRD_AWS_SECRET_ACCESS_KEY}
+    - run:
+        name : fix branch
+        command: |
+            echo ${CIRCLE_BRANCH} |sed -ri "s/BRANCH_NAME/$CIRCLE_BRANCH/g" ~/project/deploy/deploy_codebuild.sh
+    - run:
+        name : deploy prd
+        command: |
+            ~/project/deploy/deploy_codebuild.sh
+    - slack/status:
+        fail_only: true
+        mentions: 'here'
+        failure_message: 'Error Deploy Prd🚨 \n :innocent: ${CIRCLE_USERNAME}    :branch: ${CIRCLE_BRANCH}'
+        webhook: ${SLACK_WEBHOOK}
+    - slack/notify:
+        title: Prd
+        color: '#42f486'
+        message: 'Deploy OK ✨ \n :smile: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+        webhook: ${SLACK_WEBHOOK}
+ 
+workflows:
+  version: 2
+  deploy_stg:
+    when: << pipeline.parameters.deploy_stg_codebuild >>
+    jobs:
+      - deploy_stg_codebuild
+  deploy_prd:
+    jobs:
+      - deploy_prd_codebuild:
+          filters:
+            branches:
+              only: master
