@@ -1,0 +1,235 @@
+version: 2.1
+orbs:
+  aws-ecr: circleci/aws-ecr@7.0.0
+  aws-ecs: circleci/aws-ecs@2.2.0
+  aws-cli: circleci/aws-cli@2.0.0
+  slack: circleci/slack@3.4.2
+
+parameters:
+  deploy_app_stg:
+    type: boolean
+    default: false
+
+executors:
+  docker_build:
+    machine:
+      docker_layer_caching: true
+
+## Laravel Test
+jobs:
+  laravel_test:
+    docker:
+      - image: circleci/php:7.2.9-fpm-browsers
+        environment:
+          APP_ENV: testing
+          DB_HOST: 127.0.0.1
+          DB_CONNECTION: mysql
+          DB_DATABASE: 'test'
+          DB_USERNAME: 'root'
+          DB_PASSWORD: 'hoge'
+          DB_PORT: 3306
+          BROADCAST_DRIVER: log
+          CACHE_DRIVER: file
+          QUEUE_CONNECTION: redis
+          SESSION_DRIVER: array
+          AUTO_CONTRACT_CANCEL_HOUR: 48
+          AUTO_CONTRACT_CANCEL_ALERT_HOUR: 24
+          REDIS_HOST: 127.0.0.1
+          REDIS_PASSWORD: 'null'
+          REDIS_PORT: 6379
+      - image: circleci/mysql:5.7-ram
+        environment:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'false'
+          MYSQL_ROOT_PASSWORD: 'hoge'
+          MYSQL_DATABASE: 'test'
+          MYSQL_USER: 'root'
+      - image: redis:6.0.8
+    steps:
+      - checkout
+      - run: 
+          name: Install awscli
+          command: |
+            sudo apt-get update && sudo apt-get install python3-pip groff-base
+            sudo pip3 install awscli --ignore-installed six
+            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_STG_S3}
+            aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_STG_S3}
+      - run:
+          name: Install MySQL driver
+          command: |
+            sudo docker-php-ext-configure pdo_mysql --with-pdo-mysql=mysqlnd
+            sudo docker-php-ext-install zip bcmath pdo_mysql mysqli 
+      - run:
+          name: Install gd
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libfreetype6-dev libjpeg62-turbo-dev libpng-dev zlib1g-dev libsqlite3-dev
+            sudo docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/
+            sudo docker-php-ext-install -j$(nproc) gd
+      - run: chmod -R 777 storage bootstrap/cache
+      - restore_cache:
+          keys:
+          - composer-v1-{{ checksum "composer.lock" }}
+          - composer-v1-
+      - run: composer config -g repos.packagist composer https://packagist.jp && composer global require hirak/prestissimo
+      - run: composer install --no-progress --no-suggest --prefer-dist --optimize-autoloader --no-scripts
+      - save_cache:
+          key: composer-v1-{{ checksum "composer.lock" }}
+          paths:
+            - vendor
+      - run:
+          name: Setup Environment
+          command: |
+            aws s3 cp s3://backup.adachin.com/app/ci/env ./.env 
+            php artisan key:generate
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan migrate
+            php artisan db:seed
+      - run:
+         name: Start Chrome Driver
+         command: ./vendor/laravel/dusk/bin/chromedriver-linux
+         background: true
+      - run:
+         name: Run Laravel Server
+         command: php artisan serve
+         background: true
+      - run:
+         name: Test 1 - Run phpunit
+         command: vendor/bin/phpunit
+      - run:
+         name: Test 2 - Run Laravel Dusk
+         command: php artisan dusk
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Test] Error phpunit/dusk 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Tests 👍
+          color: '#42f486'
+          message: 'App is phpunit/dusk OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+## Deploy stg
+  deploy_app_stg:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - aws-cli/setup:
+          aws-region: AWS_REGION
+          aws-access-key-id: AWS_ACCESS_KEY_ID_PRE_S3
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRE_S3
+          override-installed: true
+      - run:
+          name: copy .env
+          command: |
+            aws s3 cp s3://stg.adachin.com/app/stg/env ./.env 
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/stg/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_STG_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_STG_S3}" credentials
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_STG
+          aws-access-key-id: STG_TERRAFORM_AWS_ACCESS_KEY_ID
+          aws-secret-access-key: STG_TERRAFORM_AWS_SECRET_ACCESS_KEY
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/stg/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_STG}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxxx,subnet-xxxxxxxx,subnet-xxxxxx
+          security-group-ids: sg-xxxxxxxxx
+          overrides: "{\"containerOverrides\":[{\"name\": \"adachin-app\",\"command\": [\"sh\", \"/var/www/adachin/docker/stg/migrate.sh\"]}]}"
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Stg] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Stg 👍
+          color: '#42f486'
+          message: 'App is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+## Deploy Prd
+  deploy_app_prd:
+    working_directory: ~/app
+    executor: docker_build
+    steps:
+      - checkout
+      - aws-cli/setup:
+          aws-region: AWS_REGION
+          aws-access-key-id: AWS_ACCESS_KEY_ID_PRE_S3
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRE_S3
+          override-installed: true
+      - run:
+          name: copy .env
+          command: |
+            aws s3 cp s3://backup.adachin.com/app/prd/prd-env ./.env 
+      - run:
+          name: copy and echo aws credentials
+          command: |
+            cp docker/prd/adachin-app/common/.aws/credentials credentials \
+            && sed -i "2i aws_access_key_id =${AWS_ACCESS_KEY_ID_PRD_S3}" credentials \
+            && sed -i "3i aws_secret_access_key =${AWS_SECRET_ACCESS_KEY_PRD_S3}" credentials
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_ACCOUNT_URL_PRD
+          aws-access-key-id: PRD_TERRAFORM_AWS_ACCESS_KEY_ID
+          aws-secret-access-key: PRD_TERRAFORM_AWS_SECRET_ACCESS_KEY
+          region: AWS_REGION
+          repo: 'adachin-app'
+          dockerfile: docker/prd/adachin-app/Dockerfile
+          tag: "${CIRCLE_SHA1}"
+      - aws-ecs/update-service:
+          family: 'adachin-app'
+          service-name: 'adachin-app-service'
+          cluster-name: 'adachin'
+          container-image-name-updates: 'container=adachin-app,image-and-tag=${AWS_ECR_ACCOUNT_URL_PRD}/adachin-app:${CIRCLE_SHA1}'
+      - aws-ecs/run-task:
+          cluster: 'adachin'
+          task-definition: 'adachin-app'
+          count: 1
+          launch-type: FARGATE
+          awsvpc: true
+          subnet-ids: subnet-xxxxxxx,subnet-xxxxxxx,subnet-xxxxxxx
+          security-group-ids: sg-xxxxxxxxxx
+          overrides: "{\"containerOverrides\":[{\"name\": \"adachin-app\",\"command\": [\"sh\", \"/var/www/adachin/docker/prd/migrate.sh\"]}]}"
+      - slack/status:
+          fail_only: true
+          mentions: 'here'
+          failure_message: '[Prd] Error container build/deploy 🚨 \n :innocent: ${CIRCLE_USERNAME}     :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+      - slack/notify:
+          title: Prd 👍
+          color: '#42f486'
+          message: 'App is build/deploy OK ✨ \n :grin: ${CIRCLE_USERNAME}   :branch: ${CIRCLE_BRANCH}'
+          webhook: ${SLACK_WEBHOOK}
+
+workflows:
+  version: 2
+  tests:
+    jobs:
+      - laravel_test
+  deploy_stg:
+    when: << pipeline.parameters.deploy_app_stg >>
+    jobs:
+      - deploy_app_stg
+  deploy_prd:
+    jobs:
+      - deploy_app_prd:
+          filters:
+            branches:
+              only: master
