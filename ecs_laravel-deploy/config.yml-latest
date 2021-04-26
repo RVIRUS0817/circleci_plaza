@@ -118,8 +118,8 @@ jobs:
       - checkout
       - aws-cli/setup:
           aws-region: AWS_REGION
-          aws-access-key-id: AWS_ACCESS_KEY_ID_PRE_S3
-          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRE_S3
+          aws-access-key-id: AWS_ACCESS_KEY_ID_STG_S3
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG_S3
           override-installed: true
       - run:
           name: copy .env
@@ -172,8 +172,8 @@ jobs:
       - checkout
       - aws-cli/setup:
           aws-region: AWS_REGION
-          aws-access-key-id: AWS_ACCESS_KEY_ID_PRE_S3
-          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRE_S3
+          aws-access-key-id: AWS_ACCESS_KEY_ID_PRD_S3
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRD_S3
           override-installed: true
       - run:
           name: copy .env
