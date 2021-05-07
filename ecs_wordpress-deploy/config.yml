@@ -19,11 +19,11 @@ jobs:
     executor: docker_build
     steps:
       - checkout
-      - run:
-          name: setting aws configure
-          command: |
-            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_STG} \
-            && aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_STG}
+      - aws-cli/setup:
+         aws-region: AWS_REGION
+         aws-access-key-id: AWS_ACCESS_KEY_ID_STG
+         aws-secret-access-key: AWS_SECRET_ACCESS_KEY_STG
+         override-installed: true
       - run:
           name: copy wp-config.php
           command: |
@@ -47,11 +47,11 @@ jobs:
     executor: docker_build
     steps:
       - checkout
-      - run:
-          name: setting aws configure
-          command: |
-            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID_PRD} \
-            && aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY_PRD}
+      - aws-cli/setup:
+         aws-region: AWS_REGION
+         aws-access-key-id: AWS_ACCESS_KEY_ID_PRD
+         aws-secret-access-key: AWS_SECRET_ACCESS_KEY_PRD
+         override-installed: true
       - run:
           name: copy wp-config.php
           command: |
